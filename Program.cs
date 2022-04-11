@@ -166,6 +166,128 @@ public class Program
         Console.WriteLine($"result    现值为：{result}");
     }
 
+    //创建自旋锁  Spinlock vs Mutex //
+    private static SpinLock spin = new SpinLock();
+    public static void Spinklock()
+    {
+        Action action = () =>
+        {
+            bool lockTaken = false;
+            try
+            {
+                    //申请获取锁
+                    spin.Enter(ref lockTaken);
+                    //临界区
+                    for (int i = 0; i < 10; i++)
+                {
+                    Console.WriteLine($"当前线程{Thread.CurrentThread.ManagedThreadId.ToString()},输出:1");
+                }
+            }
+            finally
+            {
+                    //工作完毕，或者产生异常时，检测一下当前线程是否占有锁，如果有了锁释放它
+                    //避免出行死锁
+                    if (lockTaken)
+                {
+                    spin.Exit();
+                }
+            }
+        };
+        Action action2 = () =>
+        {
+            bool lockTaken = false;
+            try
+            {
+                    //申请获取锁
+                    spin.Enter(ref lockTaken);
+                    //临界区
+                    for (int i = 0; i < 10; i++)
+                {
+                    Console.WriteLine($"当前线程{Thread.CurrentThread.ManagedThreadId.ToString()},输出:2");
+                }
+
+            }
+            finally
+            {
+                    //工作完毕，或者产生异常时，检测一下当前线程是否占有锁，如果有了锁释放它
+                    //避免出行死锁
+                    if (lockTaken)
+                {
+                    spin.Exit();
+                }
+            }
+
+        };
+        //并行执行2个action
+        Parallel.Invoke(action, action2);
+
+    }
+
+    //读写锁， //策略支持递归
+        private static ReaderWriterLockSlim rwl = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+        private static int index = 0;
+        static void read()
+        {
+            try
+            {
+                //进入读锁
+                rwl.EnterReadLock();
+                for (int i = 0; i < 5; i++)
+                {
+                    Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},读数据,读到index:{index}");
+                }
+            }
+            finally
+            {
+                //退出读锁
+                rwl.ExitReadLock();
+            }
+        }
+        static void write()
+        {
+            try
+            {
+                //尝试获写锁
+                while (!rwl.TryEnterWriteLock(50))
+                {
+                    Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},等待写锁");
+                }
+                Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},获取到写锁");
+                for (int i = 0; i < 5; i++)
+                {
+                    index++;
+                    Thread.Sleep(50);
+                }
+                Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},写操作完成");
+            }
+            finally
+            {
+                //退出写锁
+                rwl.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// 执行多线程读写
+        /// </summary>
+        public static void test()
+        {
+            var taskFactory = new TaskFactory(TaskCreationOptions.LongRunning, TaskContinuationOptions.None);
+            Task[] task = new Task[6];
+            task[1] = taskFactory.StartNew(write); //写
+            task[0] = taskFactory.StartNew(read); //读
+            task[2] = taskFactory.StartNew(read); //读
+            task[3] = taskFactory.StartNew(write); //写
+            task[4] = taskFactory.StartNew(read); //读
+            task[5] = taskFactory.StartNew(read); //读
+
+            for (var i=0; i<6; i++)
+            {
+                task[i].Wait();
+            }
+
+        }
+
     static void Main(string[] args)
     {
         Stopwatch stopwatch = new();
@@ -178,7 +300,7 @@ public class Program
         // stopwatch.Stop();
         // Console.WriteLine(stopwatch.ElapsedMilliseconds);
 
-
+        Spinklock();
         Thread.Sleep(1000);
 
         Console.ReadKey();
