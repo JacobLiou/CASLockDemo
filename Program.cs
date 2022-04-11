@@ -1,7 +1,9 @@
 ﻿using CASLockDemo;
 using System.Diagnostics;
 using System.Linq;
+using System.Collections.Concurrent;
 // https://www.cnblogs.com/wei325/p/16065342.html
+// https://docs.microsoft.com/en-us/dotnet/api/system.threading.thread?view=net-6.0 官方API浏览和理解
 
 //无锁和有锁
 // 　CAS在.NET中的实现类是Interlocked，内部提供很多原子操作的方法，最终都是调用Interlocked.CompareExchange(ref out,更新值，期望值) //基于内存屏障的方式操作
@@ -175,19 +177,19 @@ public class Program
             bool lockTaken = false;
             try
             {
-                    //申请获取锁
-                    spin.Enter(ref lockTaken);
-                    //临界区
-                    for (int i = 0; i < 10; i++)
+                //申请获取锁
+                spin.Enter(ref lockTaken);
+                //临界区
+                for (int i = 0; i < 10; i++)
                 {
                     Console.WriteLine($"当前线程{Thread.CurrentThread.ManagedThreadId.ToString()},输出:1");
                 }
             }
             finally
             {
-                    //工作完毕，或者产生异常时，检测一下当前线程是否占有锁，如果有了锁释放它
-                    //避免出行死锁
-                    if (lockTaken)
+                //工作完毕，或者产生异常时，检测一下当前线程是否占有锁，如果有了锁释放它
+                //避免出行死锁
+                if (lockTaken)
                 {
                     spin.Exit();
                 }
@@ -198,10 +200,10 @@ public class Program
             bool lockTaken = false;
             try
             {
-                    //申请获取锁
-                    spin.Enter(ref lockTaken);
-                    //临界区
-                    for (int i = 0; i < 10; i++)
+                //申请获取锁
+                spin.Enter(ref lockTaken);
+                //临界区
+                for (int i = 0; i < 10; i++)
                 {
                     Console.WriteLine($"当前线程{Thread.CurrentThread.ManagedThreadId.ToString()},输出:2");
                 }
@@ -209,9 +211,9 @@ public class Program
             }
             finally
             {
-                    //工作完毕，或者产生异常时，检测一下当前线程是否占有锁，如果有了锁释放它
-                    //避免出行死锁
-                    if (lockTaken)
+                //工作完毕，或者产生异常时，检测一下当前线程是否占有锁，如果有了锁释放它
+                //避免出行死锁
+                if (lockTaken)
                 {
                     spin.Exit();
                 }
@@ -224,72 +226,116 @@ public class Program
     }
 
     //读写锁， //策略支持递归
-        private static ReaderWriterLockSlim rwl = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
-        private static int index = 0;
-        static void read()
+    private static ReaderWriterLockSlim rwl = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+    private static int index = 0;
+    static void read()
+    {
+        try
         {
-            try
+            //进入读锁
+            rwl.EnterReadLock();
+            for (int i = 0; i < 5; i++)
             {
-                //进入读锁
-                rwl.EnterReadLock();
-                for (int i = 0; i < 5; i++)
-                {
-                    Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},读数据,读到index:{index}");
-                }
-            }
-            finally
-            {
-                //退出读锁
-                rwl.ExitReadLock();
+                Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},读数据,读到index:{index}");
             }
         }
-        static void write()
+        finally
         {
-            try
+            //退出读锁
+            rwl.ExitReadLock();
+        }
+    }
+    static void write()
+    {
+        try
+        {
+            //尝试获写锁
+            while (!rwl.TryEnterWriteLock(50))
             {
-                //尝试获写锁
-                while (!rwl.TryEnterWriteLock(50))
-                {
-                    Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},等待写锁");
-                }
-                Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},获取到写锁");
-                for (int i = 0; i < 5; i++)
-                {
-                    index++;
-                    Thread.Sleep(50);
-                }
-                Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},写操作完成");
+                Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},等待写锁");
             }
-            finally
+            Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},获取到写锁");
+            for (int i = 0; i < 5; i++)
             {
-                //退出写锁
-                rwl.ExitWriteLock();
+                index++;
+                Thread.Sleep(50);
             }
+            Console.WriteLine($"线程id:{Thread.CurrentThread.ManagedThreadId},写操作完成");
+        }
+        finally
+        {
+            //退出写锁
+            rwl.ExitWriteLock();
+        }
+    }
+
+    /// <summary>
+    /// 执行多线程读写
+    /// </summary>
+    public static void test()
+    {
+        var taskFactory = new TaskFactory(TaskCreationOptions.LongRunning, TaskContinuationOptions.None);
+        Task[] task = new Task[6];
+        task[1] = taskFactory.StartNew(write); //写
+        task[0] = taskFactory.StartNew(read); //读
+        task[2] = taskFactory.StartNew(read); //读
+        task[3] = taskFactory.StartNew(write); //写
+        task[4] = taskFactory.StartNew(read); //读
+        task[5] = taskFactory.StartNew(read); //读
+
+        for (var i = 0; i < 6; i++)
+        {
+            task[i].Wait();
         }
 
-        /// <summary>
-        /// 执行多线程读写
-        /// </summary>
-        public static void test()
+    }
+
+    /// <summary>
+    /// 线程安全集合用法
+    /// </summary>
+    public static void BC()
+    {
+        //线程安全集合
+        using (BlockingCollection<int> blocking = new BlockingCollection<int>())
         {
-            var taskFactory = new TaskFactory(TaskCreationOptions.LongRunning, TaskContinuationOptions.None);
-            Task[] task = new Task[6];
-            task[1] = taskFactory.StartNew(write); //写
-            task[0] = taskFactory.StartNew(read); //读
-            task[2] = taskFactory.StartNew(read); //读
-            task[3] = taskFactory.StartNew(write); //写
-            task[4] = taskFactory.StartNew(read); //读
-            task[5] = taskFactory.StartNew(read); //读
+            int NUMITEMS = 10000;
 
-            for (var i=0; i<6; i++)
+            for (int i = 1; i < NUMITEMS; i++)
             {
-                task[i].Wait();
+                blocking.Add(i);
             }
+            //完成添加
+            blocking.CompleteAdding();
 
+            int outerSum = 0;
+
+            // 定义一个委托方法取出集合元素
+            Action action = () =>
+            {
+                int localItem;
+                int localSum = 0;
+
+                //取出并删除元素，先进先出
+                while (blocking.TryTake(out localItem))
+                {
+                    localSum += localItem;
+                }
+                //两数相加替换第一个值
+                Interlocked.Add(ref outerSum, localSum);
+            };
+
+            //并行3个线程执行，多个线程同时取集合的数据
+            Parallel.Invoke(action, action, action);
+
+            Console.WriteLine($"0+...{NUMITEMS - 1} = {((NUMITEMS * (NUMITEMS - 1)) / 2)},输出结果：{outerSum}");
+            //此集合是否已标记为已完成添加且为空
+            Console.WriteLine($"线程安全集合.IsCompleted={blocking.IsCompleted}");
         }
+    }
 
     static void Main(string[] args)
     {
+        BC();
         Stopwatch stopwatch = new();
         stopwatch.Start();
         GetIncrement();
